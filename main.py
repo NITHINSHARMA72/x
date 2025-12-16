@@ -3,19 +3,15 @@ import asyncio
 import logging
 import random
 import threading
-from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError, ChatWriteForbiddenError
-from telethon.tl.functions.messages import ForwardMessagesRequest
 
 # ================= CONFIG =================
 
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
-PHONE = os.getenv("PHONE")
-TWO_FA = os.getenv("TWO_FA", "")
 
 SESSION = "forwarder_session"
 
@@ -39,11 +35,11 @@ log = logging.getLogger("FORWARDER")
 # ================= TELEGRAM =================
 
 client = TelegramClient(SESSION, API_ID, API_HASH)
+
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 queue = asyncio.Queue()
-rate_limited = {}  # group_id: datetime
 
 # ================= FLASK =================
 
@@ -55,15 +51,11 @@ async def login():
     await client.connect()
 
     if not await client.is_user_authorized():
-        log.info("Sending OTP...")
-        await client.send_code_request(PHONE)
-        code = input("ENTER OTP: ")
-        try:
-            await client.sign_in(PHONE, code)
-        except:
-            await client.sign_in(password=TWO_FA)
+        raise RuntimeError(
+            "❌ Session not authorized. Upload forwarder_session.session file."
+        )
 
-    log.info("Telegram login success")
+    log.info("✅ Telegram login success")
 
 async def get_groups():
     groups = []
@@ -73,20 +65,21 @@ async def get_groups():
                 groups.append(d)
     return groups
 
-async def forward_message(msg, chat_id):
+async def forward_message(message, target_chat_id):
     for attempt in range(MAX_RETRY):
         try:
             await asyncio.sleep(random.uniform(*FORWARD_DELAY))
-await client.forward_messages(
-    chat_id,
-    msg["id"],
-    from_peer=msg["from"]
-)
+
+            await client.forward_messages(
+                target_chat_id,
+                message["id"],
+                from_peer=message["from"]
+            )
+
             return True, "OK"
 
         except FloodWaitError as e:
             wait = e.seconds + BACKOFF_BASE * (2 ** attempt)
-            rate_limited[chat_id] = datetime.now()
             log.warning(f"FloodWait {wait}s")
             await asyncio.sleep(wait)
 
@@ -102,16 +95,17 @@ await client.forward_messages(
 async def worker():
     while True:
         item = await queue.get()
-message = {
-    "id": item["message_id"],
-    "from": item["from_chat"]
-}
+
+        message = {
+            "id": item["message_id"],
+            "from": item["from_chat"]
+        }
 
         groups = await get_groups()
         results = []
 
         for i in range(0, len(groups), BATCH_SIZE):
-            batch = groups[i:i+BATCH_SIZE]
+            batch = groups[i:i + BATCH_SIZE]
 
             for g in batch:
                 ok, err = await forward_message(message, g.id)
@@ -121,6 +115,7 @@ message = {
 
         report = "\n".join(results)
         await client.send_message("me", f"📊 Forward Report\n\n{report}")
+
         queue.task_done()
 
 # ================= WEBHOOK =================
@@ -128,8 +123,9 @@ message = {
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.json
-    if not data or "message" not in data:
-        return jsonify({"error": "message missing"}), 400
+
+    if not data or "from_chat" not in data or "message_id" not in data:
+        return jsonify({"error": "from_chat and message_id required"}), 400
 
     asyncio.run_coroutine_threadsafe(queue.put(data), loop)
     return jsonify({"status": "queued"}), 200
