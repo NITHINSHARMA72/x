@@ -17,7 +17,7 @@ API_HASH = os.getenv("API_HASH")
 PHONE = os.getenv("PHONE")
 TWO_FA = os.getenv("TWO_FA", "")
 
-SESSION = "render_forwarder"
+SESSION = "forwarder_session"
 
 FORWARD_DELAY = (3, 7)
 BATCH_SIZE = 10
