@@ -77,7 +77,11 @@ async def forward_message(msg, chat_id):
     for attempt in range(MAX_RETRY):
         try:
             await asyncio.sleep(random.uniform(*FORWARD_DELAY))
-            await client.forward_messages(chat_id, msg)
+await client.forward_messages(
+    chat_id,
+    msg["id"],
+    from_peer=msg["from"]
+)
             return True, "OK"
 
         except FloodWaitError as e:
@@ -98,7 +102,10 @@ async def forward_message(msg, chat_id):
 async def worker():
     while True:
         item = await queue.get()
-        message = item["message"]
+message = {
+    "id": item["message_id"],
+    "from": item["from_chat"]
+}
 
         groups = await get_groups()
         results = []
